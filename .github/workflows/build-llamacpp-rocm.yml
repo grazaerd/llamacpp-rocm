@@ -289,6 +289,20 @@ jobs:
         set /p VS_PATH=<vs_path.txt
         call "%VS_PATH%\VC\Auxiliary\Build\vcvars64.bat"
 
+        REM Host-side (CPU) optimisation flags: Zen 3 tuning + full LTO.
+        REM Applied to C/C++ only. The HIP device code uses CMAKE_HIP_FLAGS, which is left alone.
+        set "CPU_OPT_FLAGS=-march=znver3 -flto=full"
+
+        REM Full LTO produces LLVM bitcode objects, which MSVC link.exe / lib.exe cannot read.
+        REM Link with lld and archive with llvm-ar from the ROCm toolchain instead.
+        set "LLVM_BIN=C:\opt\rocm\lib\llvm\bin"
+        for %%T in (lld-link.exe llvm-ar.exe llvm-ranlib.exe) do (
+          if not exist "%LLVM_BIN%\%%T" (
+            echo ::error::%%T not found in %LLVM_BIN%, which is required for -flto=full
+            exit /b 1
+          )
+        )
+
         REM Create build directory
         cd llama.cpp
         mkdir build
@@ -298,7 +312,13 @@ jobs:
         cmake .. -G Ninja ^
           -DCMAKE_C_COMPILER="C:\opt\rocm\lib\llvm\bin\clang.exe" ^
           -DCMAKE_CXX_COMPILER="C:\opt\rocm\lib\llvm\bin\clang++.exe" ^
-          -DCMAKE_CXX_FLAGS="-IC:\opt\rocm\include" ^
+          -DCMAKE_AR="%LLVM_BIN%\llvm-ar.exe" ^
+          -DCMAKE_RANLIB="%LLVM_BIN%\llvm-ranlib.exe" ^
+          -DCMAKE_C_FLAGS="%CPU_OPT_FLAGS%" ^
+          -DCMAKE_CXX_FLAGS="-IC:\opt\rocm\include %CPU_OPT_FLAGS%" ^
+          -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld" ^
+          -DCMAKE_SHARED_LINKER_FLAGS="-fuse-ld=lld" ^
+          -DCMAKE_MODULE_LINKER_FLAGS="-fuse-ld=lld" ^
           -DCMAKE_CROSSCOMPILING=ON ^
           -DCMAKE_BUILD_TYPE=Release ^
           -DGPU_TARGETS="%mapped_target%" ^
@@ -463,6 +483,7 @@ jobs:
         - **ROCm Version**: ${{ env.DETECTED_ROCM_VERSION || env.ROCM_VERSION }}
         - **llama.cpp Commit Hash**: ${{ env.LLAMACPP_COMMIT_HASH }}
         - **Build Type**: Release
+        - **CPU Flags**: -march=znver3 -flto=full
         - **Platform**: Windows
         
         ## Build Artifacts
